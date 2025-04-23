@@ -13,7 +13,7 @@ def get_train_val_dataloaders(cfgs):
     crop = cfgs.get('crop', None)
     use_mask = cfgs.get('use_mask', False)
     normalize = cfgs.get('normalize', True)
-
+    use_vis = cfgs.get('use_vis', False)  # Add this line to define use_vis
 
     data_dir = cfgs.get('data_dir', 'data/gbh/')
     data_split_dirs = cfgs.get('data_split_dirs', "data/split1+/")
@@ -32,7 +32,9 @@ def get_train_val_dataloaders(cfgs):
     overfit = cfgs.get('overfit', False)
 
     train_loader = val_loader = None
-    get_loader = lambda **kargs: get_tri_image_loader(**kargs, data_dir=data_dir, use_mask=use_mask, num_workers=num_workers, image_size=image_size, crop=crop, normalize=normalize, overfit=overfit)
+    get_loader = lambda **kargs: get_tri_image_loader(**kargs, data_dir=data_dir, use_mask=use_mask, 
+        num_workers=num_workers, image_size=image_size, crop=crop, normalize=normalize, overfit=overfit,
+        use_vis=use_vis)  # Add use_vis parameter here
 
     assert os.path.isdir(data_dir), "Data directory does not exist: %s" %data_dir
     print(f"Loading training data from {data_train}")
