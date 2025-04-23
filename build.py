@@ -1,4 +1,4 @@
-def get_model_and_optimizer(cfgs, test=False)
+def get_model_and_optimizer(cfgs, test=False):
     if cfgs["model"] == "htcdc":
         from htcdc import UBins
         model = UBins(cfgs)
