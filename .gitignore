@@ -2,6 +2,11 @@
 _backup/
 documents/
 
+# Exclude training artifacts and data
+checkpoints/
+data/
+wandb/
+
 # Python bytecode files
 __pycache__/
 *.py[cod]
