@@ -6,10 +6,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 import os
 
-from .parts.miniViT import mViT, mViTHTC
-from .basenets import BaseHeightPredictor
-from .parts.losses import bg_loss, gaussian_loss, laplace_loss, uniform_loss, dirac_loss
-from .parts.unet import Up, Down, DoubleConv, OutConv
+# Fix relative imports to use absolute imports
+from parts.miniViT import mViT, mViTHTC
+from basenets import BaseHeightPredictor
+from parts.losses import bg_loss, gaussian_loss, laplace_loss, uniform_loss, dirac_loss
+from parts.unet import Up, Down, DoubleConv, OutConv
 
 class _UNet(nn.Module):
     def __init__(self, num_classes, fusion_mode):
@@ -306,10 +307,35 @@ class UBins(BaseHeightPredictor):
         self.num_bins = cfgs.get("num_classes", 256)
         self.patch_size = cfgs.get("patch_size", 4)
 
-        data_dir = cfgs.get("data_dir", "data/gbh/")
-        ndsm_stats_file = os.path.join(data_dir, "ndsm_stats.pickle")
-        _, _, _, self.h_max, _ = torch.load(ndsm_stats_file)
+        # Check dataset type and load appropriate stats
+        dataset_type = cfgs.get("dataset_type", "gbh")
+        if dataset_type == "dfc2023s":
+            # Use DFC2023S dataset stats
+            if cfgs.get("use_mini_dataset", False):
+                data_dir = cfgs.get("mini_dfc2023s_dir", "/home/asfand/Ahmad/datasets/DFC2023Amini/")
+            else:
+                data_dir = cfgs.get("dfc2023s_dir", "/home/asfand/Ahmad/datasets/DFC2023S/")
+                
+            stats_file = os.path.join(data_dir, "dfc2023s_stats.pickle")
+            try:
+                stats = torch.load(stats_file)
+                self.h_max = float(stats[5])  # Maximum height from stats
+                print(f"Loaded DFC2023S stats with max height: {self.h_max}")
+            except (FileNotFoundError, IndexError, TypeError) as e:
+                print(f"Warning: Could not load stats from {stats_file}, using default values: {e}")
+                self.h_max = 100.0  # Default max height for buildings
+        else:
+            # Original GBH dataset
+            data_dir = cfgs.get("data_dir", "data/gbh/")
+            try:
+                ndsm_stats_file = os.path.join(data_dir, "ndsm_stats.pickle")
+                _, _, _, self.h_max, _ = torch.load(ndsm_stats_file)
+            except (FileNotFoundError, ValueError, TypeError) as e:
+                print(f"Warning: No stats file found at {ndsm_stats_file}, using default values: {e}")
+                self.h_max = 100.0  # Default max height
+                
         self.h_min = 1 if (self.head_tail_cut & (not self.earlier)) else 1e-8
+        print(f"Using height range for binning: min={self.h_min}, max={self.h_max}")
 
         kwargs = dict(
             n_bins=self.num_bins, 

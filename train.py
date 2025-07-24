@@ -10,6 +10,7 @@ from utils import AverageMeter, UpdatableDict, convert_from_string, data_to_devi
     fix_seed_for_reproducability, save_config
 from build import get_model_and_optimizer
 from dataloaders import get_train_val_dataloaders
+from cuda_setup import setup_cuda
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Training configuration')
@@ -17,17 +18,47 @@ def parse_arguments():
     parser.add_argument('--exp_config', default=None, help='Specify an experiment config file path')
     parser.add_argument('--restore', action='store_true', help='Restore the run')
     parser.add_argument('--overfit', action='store_true', help='Overfit on small batches for debugging')
+    parser.add_argument('--no_wandb', action='store_true', help='Disable wandb logging')
+    parser.add_argument('--gpu_ids', type=str, default="0", help='GPU IDs to use (comma-separated, e.g., "0,1,2")')
     args, unknown_raw = parser.parse_known_args()
     unknown = []
     for ur in unknown_raw:
         unknown.extend(ur.split("="))
     return args, unknown
 
+class DummyLogger:
+    """A dummy logger to use when wandb is disabled"""
+    def __init__(self):
+        self.id = "dummy_run"
+        print("Using dummy logger (wandb disabled)")
+    
+    def log(self, data):
+        # Print only a subset of metrics for clarity
+        if 'epoch' in data:
+            metrics_str = []
+            for k, v in data.items():
+                if isinstance(v, (int, float)):
+                    metrics_str.append(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
+            print(f"Epoch {data.get('epoch')}: " + ", ".join(metrics_str[:5]) + ("..." if len(metrics_str) > 5 else ""))
+    
+    def watch(self, model):
+        pass
+    
+    def config(self):
+        return DummyConfig()
+
+class DummyConfig:
+    def update(self, *args, **kwargs):
+        pass
+
 def train(cfgs, logger, train_dataloader, val_dataloader, model, optimizer, checkpoint_name=None, scheduler=None):
     patience = cfgs.get("patience", cfgs["max_epochs"])
     curr_patience = 0
     metric_names = cfgs.get("early_stopping", None)
     metric_modes = cfgs.get("early_stopping_mode", ['max'])
+    
+    # Get gradient accumulation steps (default to 1 if not specified)
+    gradient_accumulation_steps = cfgs.get("gradient_accumulation_steps", 1)
     
     early_stopping = False
     if metric_names is not None:
@@ -74,42 +105,47 @@ def train(cfgs, logger, train_dataloader, val_dataloader, model, optimizer, chec
     for epoch in range(start_epoch, cfgs["max_epochs"]):
         model.train()
         loss_train = AverageMeter()
+        # Reset gradient accumulation counter
+        accumulation_counter = 0
+        
         for _, image, gt in tqdm(train_dataloader, desc=f"Epoch {epoch+1}: training ..."):
-            global_step += 1
-            log_flag = (global_step % cfgs["log_interval"] == 0)
-
+            accumulation_counter += 1
+            
             image = data_to_device(image, device=cfgs["device"])
             gt = data_to_device(gt, device=cfgs["device"])
             losses, pred = model(image, gt)
             loss_total = losses["loss_total"]
-            loss_train.update(loss_total.item(), len(image))
+            
+            # Scale the loss based on accumulation steps
+            loss_total = loss_total / gradient_accumulation_steps
+            loss_train.update(loss_total.item() * gradient_accumulation_steps, len(image))
 
-            optimizer.zero_grad()
+            # Backward pass
             loss_total.backward()
-            #torch.nn.utils.clip_grad_norm_([layer.parameters() for layer in model.model.adaptive_bins_layer.patch_transformer.transformer_encoder.layers], 0.02)
-            #torch.nn.utils.clip_grad_norm_(model.model.adaptive_bins_layer.patch_transformer.transformer_encoder.parameters(), 0.002)
-            optimizer.step()
             
-            '''
-            for name, grad in zip(
-                    ['conv_out.weight', 'conv_out.bias', 'regressor.last.weight', 'regressor.last.bias'],
-                    [model.model.conv_out[0].weight.grad, model.model.conv_out[0].bias.grad, model.model.adaptive_bins_layer.regressor[4].weight.grad, model.model.adaptive_bins_layer.regressor[4].bias]):
-                print(name, grad.min(), grad.max())
-            '''
-            
-            if (cfgs.get("lr_policy", "constant") != "reduceonplateau") & (scheduler is not None):
-                scheduler.step()
-
-            if log_flag:
-                log_dict = {
-                    'step': global_step,
-                    'epoch': epoch
-                }
-                log_dict.update({'train/'+key: loss for key, loss in losses.items()})
-                if scheduler:
-                    log_dict.update({'lr': float(optimizer.param_groups[0]['lr'])})
-                log_dict.update(model.vis(image, pred, gt))
-                logger.log(log_dict)
+            # Gradient accumulation - only update weights after specified number of steps
+            if accumulation_counter % gradient_accumulation_steps == 0:
+                global_step += 1
+                log_flag = (global_step % cfgs["log_interval"] == 0)
+                
+                # Optimize
+                optimizer.step()
+                optimizer.zero_grad()
+                
+                if (cfgs.get("lr_policy", "constant") != "reduceonplateau") & (scheduler is not None):
+                    scheduler.step()
+                    
+                if log_flag:
+                    log_dict = {
+                        'step': global_step,
+                        'epoch': epoch
+                    }
+                    log_dict.update({'train/'+key: loss for key, loss in losses.items()})
+                    if scheduler:
+                        log_dict.update({'lr': float(optimizer.param_groups[0]['lr'])})
+                    log_dict.update(model.vis(image, pred, gt))
+                    logger.log(log_dict)
+        
         logger.log({
             'epoch': epoch,
             'train/loss_avg': loss_train.avg
@@ -226,22 +262,51 @@ def main():
         for key, value in zip(unknown[0::2], unknown[1::2]):
             cfgs[key] = convert_from_string(value)
     
+    # Setup CUDA and handle multi-GPU
+    cfgs["device"], gpu_list = setup_cuda(args.gpu_ids)
+    cfgs["gpu_ids"] = gpu_list
     
     project = cfgs.get("project", 'GBH')
     runname = cfgs.get("name", None)
-    logger = wandb.init(project=project, entity='chen_sn', id=cfgs["wandb_run_id"], resume='must') if cfgs["restore"] else wandb.init(project=project, entity='chen_sn', name=runname)
-    cfgs["wandb_run_id"] = cfgs["wandb_run_id"] if cfgs["restore"] else logger.id
+    
+    # Create experiment directory
+    os.makedirs(cfgs["experiment_dir"], exist_ok=True)
+    
+    # Use wandb if enabled, otherwise use dummy logger
+    if args.no_wandb:
+        logger = DummyLogger()
+        cfgs["wandb_run_id"] = "dummy_run"
+    else:
+        # Use your wandb entity or the one from config
+        entity = cfgs.get("wandb_entity", "ahmad-naghavi")
+        try:
+            logger = wandb.init(project=project, entity=entity, id=cfgs.get("wandb_run_id"), resume='must') if cfgs["restore"] else wandb.init(project=project, entity=entity, name=runname)
+            cfgs["wandb_run_id"] = cfgs["wandb_run_id"] if cfgs["restore"] else logger.id
+            logger.config.update(cfgs, allow_val_change=True)
+        except Exception as e:
+            print(f"Error initializing wandb: {e}")
+            print("Falling back to dummy logger")
+            logger = DummyLogger()
+            cfgs["wandb_run_id"] = "dummy_run"
 
     print(cfgs)
     save_config(cfgs, os.path.join(cfgs["experiment_dir"], 'config.yaml'))
-    logger.config.update(cfgs, allow_val_change=True)
+    
     seed = cfgs.get("seed", 42)
     fix_seed_for_reproducability(seed)
 
     train_loader, val_loader = get_train_val_dataloaders(cfgs)
     model, optimizer = get_model_and_optimizer(cfgs)
     model.to(cfgs["device"])
-    logger.watch(model)
+    
+    # Handle multi-GPU - only use DataParallel if CUDA is available and multiple GPUs are specified
+    if torch.cuda.is_available() and len(cfgs["gpu_ids"]) > 1:
+        model = torch.nn.DataParallel(model, device_ids=cfgs["gpu_ids"])
+    
+    # Watch model if using wandb
+    if not args.no_wandb and isinstance(logger, wandb.sdk.wandb_run.Run):
+        logger.watch(model)
+    
     train(cfgs, logger, train_loader, val_loader, model, optimizer)
 
 

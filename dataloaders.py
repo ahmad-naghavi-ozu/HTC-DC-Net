@@ -6,7 +6,17 @@ import numpy as np
 from skimage import io
 import pickle
 
+# Import DFC2023S dataset handler
+from datasets.dfc2023s import create_dfc2023s_dataloaders, create_dfc2023s_test_dataloaders
+
 def get_train_val_dataloaders(cfgs):
+    # Check if we're using DFC2023S dataset
+    dataset_type = cfgs.get('dataset_type', 'gbh')
+    
+    if dataset_type.lower() == 'dfc2023s':
+        return create_dfc2023s_dataloaders(cfgs)
+        
+    # Original GBH dataset code
     batch_size = cfgs.get('batch_size', 8)
     num_workers = cfgs.get('num_workers', 4)
     image_size = cfgs.get('image_size', 256)
@@ -48,6 +58,13 @@ def get_train_val_dataloaders(cfgs):
     return train_loader, val_loader
 
 def get_test_dataloaders(cfgs):
+    # Check if we're using DFC2023S dataset
+    dataset_type = cfgs.get('dataset_type', 'gbh')
+    
+    if dataset_type.lower() == 'dfc2023s':
+        return create_dfc2023s_test_dataloaders(cfgs)
+    
+    # Original code for GBH dataset
     num_workers = cfgs.get('num_workers', 4)
     image_size = cfgs.get('image_size', 256)
     crop = cfgs.get('crop', None)
@@ -133,7 +150,8 @@ def online_get_ndsm_stats(data_dir, image_paths):
 
 class GBHDataset(torch.utils.data.Dataset):
     def __init__(self, data_dir, data_mode, image_size=256, use_mask=False, crop=None, hflip=False, \
-        normalize=True, is_validation=False, overfit=False):
+        normalize=True, is_validation=False, overfit=False, rcnn=False, multitask=False, ordinal=False, \
+        num_classes=1000, sup_mode=False, is_h=True, use_vis=False, noise=False, prototype=False):
         super(GBHDataset, self).__init__()
         self.root = data_dir
         self.paths = make_gbh_dataset(data_dir, data_mode, overfit)
@@ -144,6 +162,10 @@ class GBHDataset(torch.utils.data.Dataset):
         self.normalize = normalize
         self.use_mask = use_mask
         self.is_validation = is_validation
+        self.rcnn = rcnn
+        self.sup_mode = sup_mode
+        self.is_h = is_h
+        self.noise = noise
         image_stats_file = os.path.join(data_dir, 'image_stats.pickle')
         self.mean, self.std = torch.load(image_stats_file)
 
@@ -237,7 +259,7 @@ def get_tri_image_loader(data_dir, data_split, is_validation=False, batch_size=8
         sup_mode = [False] * len(data_split)
     for ds, sm, task in zip(data_split.values(), sup_mode, tasks):
         datasets.append(dataset_class(data_dir, ds, image_size=image_size, crop=crop, normalize=normalize, \
-        use_mask=use_mask, use_normal=use_normal, is_validation=is_validation, overfit=overfit, rcnn=rcnn, \
+        use_mask=use_mask, hflip=(not is_validation), is_validation=is_validation, overfit=overfit, rcnn=rcnn, \
         multitask=multitask, ordinal=ordinal, num_classes=num_classes, sup_mode=sm, is_h=task, use_vis=use_vis, \
         noise=noise, prototype=prototype))
     dataset = torch.utils.data.ConcatDataset(datasets)

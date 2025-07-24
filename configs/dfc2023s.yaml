@@ -1,0 +1,44 @@
+## data configuration
+dataset_type: dfc2023s
+dfc2023s_dir: /home/asfand/Ahmad/datasets/DFC2023S/
+data_split_dirs: /home/asfand/Ahmad/HTC-DC-Net-main/data/DFC2023S/
+
+# Increased from 256 to 512 to use full native resolution
+image_size: 512
+# Reduced batch size from 8 to 2 to accommodate larger images
+batch_size: 2
+num_workers: 4
+use_mask: true
+normalize: true
+use_sar: false # Set to true if you want to use SAR data as additional input channel
+
+## model configuration
+model: htcdc
+backbone: efficientnetb0
+project: HTCDC_DFC2023S_FullRes
+# Increased patch size from 4 to 8 for better efficiency with larger images
+patch_size: 8
+num_classes: 256
+fusion_mode: last
+head_tail_cut: true
+prob_loss: gaussian
+prob_loss_bg: bg
+
+## training configuration
+max_epochs: 200
+checkpoint_interval: 25
+log_interval: 25
+# Reduced learning rate slightly for more stable training with larger images
+lr: 0.00005
+chamfer_weight: 0.01
+optimizer: AdamW
+
+early_stopping: ['mae', 'rmse', 'val/loss_total']
+early_stopping_mode: ['min', 'min', 'min']
+patience: 20
+
+# Added gradient accumulation to simulate larger batch sizes
+gradient_accumulation_steps: 4
+
+checkpoint_dir: checkpoints
+device: cuda

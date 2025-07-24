@@ -1,0 +1,48 @@
+## data configuration
+dataset_type: dfc2023s
+use_mini_dataset: true
+mini_dfc2023s_dir: /home/asfand/Ahmad/datasets/DFC2023Amini/
+data_split_dirs: /home/asfand/Ahmad/HTC-DC-Net-main/data/DFC2023Amini/
+
+# Using full 512×512 resolution
+image_size: 512
+# Reduced batch size due to memory constraints of 512×512 images
+batch_size: 2
+num_workers: 4
+use_mask: true
+normalize: true
+use_sar: false
+
+## model configuration
+model: htcdc
+backbone: efficientnetb0
+# Wandb settings - using consistent project name with HTCDC- prefix (capital letters)
+project: HTCDC-DFC2023S
+wandb_entity: ahmad-naghavi-ozu
+# Increased patch size for better efficiency with larger images
+patch_size: 8
+num_classes: 256
+fusion_mode: last
+head_tail_cut: true
+prob_loss: gaussian
+prob_loss_bg: bg
+
+## training configuration - reduced for debugging
+max_epochs: 50
+checkpoint_interval: 10
+log_interval: 5
+# Slightly reduced learning rate for stability with larger images
+lr: 0.00005
+chamfer_weight: 0.01
+optimizer: AdamW
+
+# Added gradient accumulation to simulate larger batch sizes
+gradient_accumulation_steps: 4
+
+# Shorter patience for debugging runs
+early_stopping: ['mae', 'rmse', 'val/loss_total']
+early_stopping_mode: ['min', 'min', 'min']
+patience: 10
+
+checkpoint_dir: checkpoints
+device: cuda
